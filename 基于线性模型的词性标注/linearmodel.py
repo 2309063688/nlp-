@@ -12,7 +12,7 @@ class LinearModel(object):
     def create_fspace(self, data):
         self.epsilon = list({f for wiseq, tiseq in data
                              for i, ti in enumerate(tiseq)
-                             for f in self.instantialize(wiseq, i, ti)})
+                             for f in self.instantialize(wiseq, i)})
 
         # 特征数量
         self.d = len(self.epsilon)
@@ -21,11 +21,11 @@ class LinearModel(object):
         self.fdict = {f: i for i, f in enumerate(self.epsilon)}
 
         #权重
-        self.W = np.zeros(self.d)
-        self.V = np.zeros(self.d)
+        self.W = np.zeros((self.d, self.nt))
+        self.V = np.zeros((self.d, self.nt))
 
     #特征模板
-    def instantialize(self, wiseq, idx, ti):
+    def instantialize(self, wiseq, idx):
         word = wiseq[idx]
         prev_word = wiseq[idx - 1] if idx > 0 else '\\\\'
         next_word = wiseq[idx + 1] if idx < len(wiseq) - 1 else '//'
@@ -35,34 +35,34 @@ class LinearModel(object):
         last_char = word[-1]
 
         fv = []
-        fv.append(('02', ti, word))
-        fv.append(('03', ti, prev_word))
-        fv.append(('04', ti, next_word))
-        fv.append(('05', ti, word, prev_char))
-        fv.append(('06', ti, word, next_char))
-        fv.append(('07', ti, first_char))
-        fv.append(('08', ti, last_char))
+        fv.append(('02', word))
+        fv.append(('03', prev_word))
+        fv.append(('04', next_word))
+        fv.append(('05', word, prev_char))
+        fv.append(('06', word, next_char))
+        fv.append(('07', first_char))
+        fv.append(('08', last_char))
 
         for char in word[1:-1]:
-            fv.append(('09', ti, char))
-            fv.append(('10', ti, first_char, char))
-            fv.append(('11', ti, last_char, char))
+            fv.append(('09', char))
+            fv.append(('10', first_char, char))
+            fv.append(('11', last_char, char))
 
         if len(word)==1:
-            fv.append(('12', ti, word, prev_char, next_char))
+            fv.append(('12', word, prev_char, next_char))
 
         for i in range(1, len(word)):
             prechar, char = word[i-1], word[i]
             if prev_char == char:
-                fv.append(('13', ti, char, 'consecutive'))
+                fv.append(('13', char, 'consecutive'))
 
         if len(word) <= 4:
-            fv.append(('14', ti, word))
-            fv.append(('15', ti, word))
+            fv.append(('14', word))
+            fv.append(('15', word))
         else:
             for i in range(1, 5):
-                fv.append(('14', ti, word[: i]))
-                fv.append(('15', ti, word[-i:]))
+                fv.append(('14', word[: i]))
+                fv.append(('15', word[-i:]))
 
         return fv
 
@@ -79,8 +79,16 @@ class LinearModel(object):
 
             #random.shuffle(trainset)
 
+            #保存当前轮次和上次更新的轮次
+            self.step = 0
+            self.PRESTEPS = np.zeros((self.d, self.nt), dtype='int')
+
             for batch in trainset:
                 self.update(batch)
+
+            #使用V之前更新一次
+            self.V += [(self.step - prestep) * w
+                       for prestep, w in zip(self.PRESTEPS, self.W)]
 
             #输出一次epoch的信息
             print("Epoch:" + str(epoch) + "/" + str(epochs))
@@ -120,26 +128,31 @@ class LinearModel(object):
         for i, ti in enumerate(tiseq):
             p_ti = self.predict(wiseq, i)
             if ti != p_ti:#更新权重
-                true_counts = Counter(self.instantialize(wiseq, i, ti))
-                predict_counts = Counter(self.instantialize(wiseq, i, p_ti))
-                #用map构建一个部分特征的空间
-                fiseq, fcounts = map(list, zip(*[
-                    (self.fdict[f], true_counts[f] - predict_counts[f])
-                    for f in true_counts or predict_counts if f in self.fdict
-                ]))
+                fv = self.instantialize(wiseq, i)
+                fiseq = (self.fdict[f] for f in fv if f in self.fdict)
+                for fi in fiseq:
+                    prev_w, prev_step = self.W[fi, [ti, p_ti]], self.PRESTEPS[fi, [ti,p_ti]]
 
-                self.W[fiseq] += fcounts
+                    #w更新前，更新累加权重V
+                    self.V[fi, [ti,p_ti]] += (self.step - prev_step) * prev_w
+
+                    self.W[fi, [ti, p_ti]] += [1, -1]
+
+                    #更新轮次记录
+                    self.PRESTEPS[fi, [ti, p_ti]] = self.step
+                self.step += 1
 
     #将得分最高的词性作为预测词性
     def predict(self, wiseq, idx):
-        fvs = [self.instantialize(wiseq, idx, ti) for ti in range(self.nt)]
-        scores = [self.f(fv) for fv in fvs]
+        fv = self.instantialize(wiseq, idx)
+        scores = self.f(fv)
         return np.argmax(scores)
 
     #计算得分
     def f(self, fv):
-        scores = [self.W[self.fdict[f]] for f in fv if f in self.fdict]
-        return sum(scores)
+        fiseq = [self.fdict[f] for f in fv if f in self.fdict]
+        scores = self.V[fiseq]
+        return np.sum(scores, axis=0)
 
     #评价函数
     def evaluate(self, data):
