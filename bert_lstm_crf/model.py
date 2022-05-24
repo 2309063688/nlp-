@@ -34,6 +34,7 @@ from allennlp.training.util import evaluate
 # 选择transformer模型
 transformer_model = "bert-base-chinese"
 
+torch_device = torch.device("cuda:0")
 
 class SimpleSequenceTagging(Model):
     def __init__(
@@ -253,8 +254,8 @@ def build_model(vocab: Vocabulary) -> Model:
         model_name=transformer_model
     )
     encoder = LstmSeq2SeqEncoder(
-        input_size=768,
-        hidden_size=768,
+        input_size=embedder.get_output_dim(),
+        hidden_size=1024,
         num_layers=2,
         dropout=0.5,
         bidirectional=True
@@ -274,6 +275,7 @@ def run_training_loop():
 
     vocab = build_vocab(train_data + dev_data)
     model = build_model(vocab)
+    model.to(torch_device)
 
     train_loader, dev_loader = build_data_loader(train_data, dev_data)
     train_loader.index_with(vocab)
@@ -328,7 +330,7 @@ def build_trainer(
         validation_data_loader=dev_loader,
         num_epochs=100,
         optimizer=optimizer,
-        cuda_device=-1,
+        cuda_device=0,
     )
     return trainer
 
